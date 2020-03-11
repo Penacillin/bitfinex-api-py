@@ -44,7 +44,7 @@ class Socket():
 
     def set_authenticated(self):
         self.isAuthenticated = True
-        
+
     def set_unauthenticated(self):
         self.isAuthenticated = False
 
@@ -144,6 +144,7 @@ class GenericWebsocket:
                 async with websockets.connect(self.host) as websocket:
                     self.sockets[sId].set_websocket(websocket)
                     self.sockets[sId].set_connected()
+                    self._emit('sock_ready', sId)
                     self.logger.info("Websocket connected to {}".format(self.host))
                     retries = 0
                     while True:
