@@ -55,6 +55,7 @@ class Socket():
         with self.lock:
             await self.ws.send(data)
 
+
 def _start_event_worker():
     async def event_sleep_process():
         """
@@ -66,10 +67,11 @@ def _start_event_worker():
         asyncio.set_event_loop(loop)
         loop.run_until_complete(event_sleep_process())
     event_loop = asyncio.new_event_loop()
-    worker = Thread(target=start_loop, args=(event_loop,))
+    worker = Thread(target=start_loop, args=(event_loop,), daemon=True)
     worker.start()
     ee = EventEmitter(scheduler=asyncio.ensure_future, loop=event_loop)
     return ee
+
 
 class GenericWebsocket:
     """
@@ -86,6 +88,7 @@ class GenericWebsocket:
         self.max_retries = max_retries
         self.attempt_retry = True
         self.sockets = {}
+        self._stopping = False
         # start seperate process for the even emitter
         create_ee = create_event_emitter or _start_event_worker
         self.events = create_ee()
@@ -96,6 +99,17 @@ class GenericWebsocket:
         thread and connection.
         """
         self._start_new_socket()
+
+    def stop(self):
+        """
+        Stop the websocket connection
+        """
+        self.logger.warning('stopping...')
+        self._stopping = True
+        self.worker.join()
+        self.logger.warning('Stopped.')
+        # for key, sock in self.sockets.items():
+        #     await sock.ws.close()
 
     def get_task_executable(self):
         """
@@ -110,8 +124,8 @@ class GenericWebsocket:
             asyncio.set_event_loop(loop)
             loop.run_until_complete(self._run_socket())
         worker_loop = asyncio.new_event_loop()
-        worker = Thread(target=start_loop, args=(worker_loop,))
-        worker.start()
+        self.worker = Thread(target=start_loop, args=(worker_loop,), daemon=True)
+        self.worker.start()
         return socketId
 
     def _wait_for_socket(self, socket_id):
@@ -136,10 +150,10 @@ class GenericWebsocket:
 
     async def _run_socket(self):
         retries = 0
-        sId =  len(self.sockets)
+        sId = len(self.sockets)
         s = Socket(sId)
         self.sockets[sId] = s
-        while retries < self.max_retries and self.attempt_retry:
+        while retries < self.max_retries and self.attempt_retry and not self._stopping:
             try:
                 async with websockets.connect(self.host) as websocket:
                     self.sockets[sId].set_websocket(websocket)
@@ -147,7 +161,7 @@ class GenericWebsocket:
                     self._emit('sock_ready', sId)
                     self.logger.info("Websocket connected to {}".format(self.host))
                     retries = 0
-                    while True:
+                    while not self._stopping:
                         # optimization - wait 0 seconds to force the async queue
                         # to be cleared before continuing
                         await asyncio.sleep(0)
@@ -168,6 +182,7 @@ class GenericWebsocket:
                 self.logger.info("Reconnect attempt {}/{}".format(retries, self.max_retries))
         self.logger.info("Unable to connect to websocket.")
         self._emit('stopped')
+        await self.on_close()
 
     def remove_all_listeners(self, event):
         """
